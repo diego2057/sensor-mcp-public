@@ -77,43 +77,54 @@ class MemoryOAuthProvider(OAuthProvider):
     async def get_client(
         self, client_id: str
     ) -> OAuthClientInformationFull | None:
-        return self._clients.get(client_id)
+        client = self._clients.get(client_id)
+        print(f"[OAuth] get_client({client_id!r}) -> {'found' if client else 'NOT FOUND'}", flush=True)
+        print(f"[OAuth] registered clients: {list(self._clients.keys())}", flush=True)
+        return client
 
     async def register_client(
         self, client_info: OAuthClientInformationFull
     ) -> None:
+        print(f"[OAuth] register_client({client_info.client_id!r}, redirect_uris={client_info.redirect_uris})", flush=True)
         self._clients[client_info.client_id] = client_info
 
     # ── Flujo de autorizacion ───────────────────────────────────────────────
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """
-        Auto-aprueba la solicitud y genera el codigo de autorizacion.
-        Redirige de vuelta al cliente con ?code=...&state=...
-        """
-        code = secrets.token_urlsafe(32)
-        self._codes[code] = AuthorizationCode(
-            code=code,
-            scopes=params.scopes or ["mcp"],
-            expires_at=time.time() + 300,           # 5 minutos
-            client_id=client.client_id,
-            code_challenge=params.code_challenge,
-            redirect_uri=params.redirect_uri,
-            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            resource=params.resource,
-            subject="sensor-iot-user",
-        )
+        """Auto-aprueba la solicitud y genera el codigo de autorizacion."""
+        print(f"[OAuth] authorize(client_id={client.client_id!r})", flush=True)
+        print(f"[OAuth]   redirect_uri={params.redirect_uri!r}", flush=True)
+        print(f"[OAuth]   scopes={params.scopes!r}", flush=True)
+        print(f"[OAuth]   code_challenge={params.code_challenge!r}", flush=True)
+        print(f"[OAuth]   state={params.state!r}", flush=True)
 
-        redirect = (
-            str(params.redirect_uri)
-            if params.redirect_uri
-            else str(client.redirect_uris[0])
-        )
+        code = secrets.token_urlsafe(32)
+        redirect_uri_str = str(params.redirect_uri) if params.redirect_uri else str(client.redirect_uris[0])
+
+        try:
+            self._codes[code] = AuthorizationCode(
+                code=code,
+                scopes=list(params.scopes) if params.scopes else ["mcp"],
+                expires_at=time.time() + 600,
+                client_id=client.client_id,
+                code_challenge=params.code_challenge,
+                redirect_uri=params.redirect_uri,
+                redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+                resource=params.resource,
+                subject="sensor-iot-user",
+            )
+            print(f"[OAuth] code stored OK: {code[:8]}...", flush=True)
+        except Exception as e:
+            print(f"[OAuth] ERROR storing AuthorizationCode: {e}", flush=True)
+            raise
+
         query: dict[str, str] = {"code": code}
         if params.state:
             query["state"] = params.state
-        return f"{redirect}?{urlencode(query)}"
+        final_url = f"{redirect_uri_str}?{urlencode(query)}"
+        print(f"[OAuth] redirecting to: {final_url[:80]}...", flush=True)
+        return final_url
 
     async def load_authorization_code(
         self,
@@ -121,9 +132,10 @@ class MemoryOAuthProvider(OAuthProvider):
         authorization_code: str,
     ) -> AuthorizationCode | None:
         entry = self._codes.get(authorization_code)
-        if entry and entry.expires_at > time.time():
-            return entry
-        return None
+        valid  = entry is not None and entry.expires_at > time.time()
+        print(f"[OAuth] load_authorization_code({authorization_code[:8]}...) -> {'found' if valid else 'NOT FOUND / expired'}", flush=True)
+        print(f"[OAuth] stored codes count: {len(self._codes)}", flush=True)
+        return entry if valid else None
 
     async def exchange_authorization_code(
         self,
@@ -131,7 +143,8 @@ class MemoryOAuthProvider(OAuthProvider):
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
         """Emite access_token y refresh_token de larga duracion (30 dias)."""
-        ttl = 60 * 60 * 24 * 30   # 30 dias en segundos
+        print(f"[OAuth] exchange_authorization_code(client={client.client_id!r})", flush=True)
+        ttl = 60 * 60 * 24 * 30
         exp = time.time() + ttl
 
         at_str = secrets.token_urlsafe(32)
@@ -152,9 +165,9 @@ class MemoryOAuthProvider(OAuthProvider):
             expires_at=exp,
             subject=authorization_code.subject,
         )
-        # Invalidar el codigo ya usado
         self._codes.pop(authorization_code.code, None)
 
+        print(f"[OAuth] token issued: {at_str[:8]}...", flush=True)
         return OAuthToken(
             access_token=at_str,
             token_type="bearer",
