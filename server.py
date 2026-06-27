@@ -61,6 +61,7 @@ class MemoryOAuthProvider(OAuthProvider):
         self._clients[CLIENT_ID] = OAuthClientInformationFull(
             client_id=CLIENT_ID,
             redirect_uris=[
+                "https://claude.ai/api/mcp/auth_callback",
                 "https://claude.ai/oauth/callback",
                 "https://claude.ai/api/mcp/oauth/callback",
                 "https://claude.ai/",
